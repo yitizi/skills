@@ -1,0 +1,113 @@
+{
+  "skill_name": "atlassian",
+  "_note": "Realistic prompts for testing the atlassian skill with real Jira/Confluence credentials. Run after atl-credential.ps1 -Action setup. Each prompt represents a typical user request - the test should verify the skill triggers AND completes the task correctly. Page IDs and issue keys are placeholders - replace with values from your instance.",
+  "_setup_required": [
+    "1. Run: powershell scripts/atl-credential.ps1 -Action setup (configure real Jira+Confluence URLs)",
+    "2. Pick a test page id (e.g. 586252316) and a test issue key (e.g. PROJ-123) you can read+modify",
+    "3. Replace PLACEHOLDER tokens in eval prompts before running"
+  ],
+  "evals": [
+    {
+      "id": 1,
+      "name": "confluence-pull-and-read",
+      "prompt": "拉一下 Confluence 页面 PLACEHOLDER_PAGE_ID 的内容看看，告诉我标题和当前版本号",
+      "expected_output": "Skill should: (1) call atl-confluence.py pull <id>, (2) report title + version number from .meta.json or pull output. Should NOT print full HTML body to chat (token waste).",
+      "files": [],
+      "assertions": [
+        {"text": "Used atl-confluence.py pull command", "type": "process"},
+        {"text": "Created .atlassian-cache/confluence/PLACEHOLDER_PAGE_ID/v<N>.html", "type": "file_exists"},
+        {"text": "Created .atlassian-cache/confluence/PLACEHOLDER_PAGE_ID/v<N>.draft.html", "type": "file_exists"},
+        {"text": "Reported page title and version number to user", "type": "output_contains_metadata"},
+        {"text": "Did NOT paste full HTML body into chat (>5KB content not in transcript)", "type": "token_efficiency"}
+      ]
+    },
+    {
+      "id": 2,
+      "name": "confluence-edit-and-push",
+      "prompt": "在 Confluence 页面 PLACEHOLDER_PAGE_ID 末尾加一段 '<p>测试段落 - 添加于 2026-04-27</p>'，推送上去",
+      "expected_output": "Skill should: (1) pull, (2) Edit the .draft.html using search-replace (NOT Write full file), (3) diff to verify change, (4) push. After push: cache shows v<N+1>.html.",
+      "files": [],
+      "assertions": [
+        {"text": "Used pull -> edit -> diff -> push sequence", "type": "process"},
+        {"text": "Used Edit tool (not Write) to modify .draft.html", "type": "process"},
+        {"text": "Ran 'atl-confluence.py diff' before push", "type": "process"},
+        {"text": "Push succeeded (returned OK pushed v<N+1>)", "type": "output_pattern"},
+        {"text": "New cached file v<N+1>.html exists", "type": "file_exists"},
+        {"text": "v<N>.draft.html was deleted after successful push", "type": "file_not_exists"}
+      ]
+    },
+    {
+      "id": 3,
+      "name": "confluence-conflict-detection",
+      "prompt": "拉 Confluence 页面 PLACEHOLDER_PAGE_ID。然后假设别人改了远程，模拟冲突：手动把 .meta.json 里的 latest_remote_version 改成一个比远程小的数字（比如远程是 v20 就改成 v18），然后修改 v20.draft.html，最后尝试 push",
+      "expected_output": "Push should DETECT the conflict (cached_ver != remote_ver), output the 3 recovery options, return non-zero exit code, and NOT overwrite remote.",
+      "files": [],
+      "assertions": [
+        {"text": "Push detected version mismatch", "type": "output_contains_pattern", "pattern": "remote at v.*your cache at v"},
+        {"text": "Listed recovery options (pull --force / pull --version / push --force)", "type": "output_contains"},
+        {"text": "Returned non-zero exit code (2)", "type": "exit_code", "expected": 2},
+        {"text": "Did NOT call PUT API (no version increment in cache)", "type": "no_side_effect"}
+      ]
+    },
+    {
+      "id": 4,
+      "name": "jira-get-issue",
+      "prompt": "PLACEHOLDER_ISSUE_KEY 这个 issue 是什么状态？谁负责？",
+      "expected_output": "Skill should call atl-jira.py get-issue and parse status + assignee from output, present concisely to user.",
+      "files": [],
+      "assertions": [
+        {"text": "Called atl-jira.py get-issue with the key", "type": "process"},
+        {"text": "Reported status and assignee to user", "type": "output_contains_metadata"}
+      ]
+    },
+    {
+      "id": 5,
+      "name": "jira-jql-with-chinese",
+      "prompt": "搜一下 PLACEHOLDER_PROJECT 项目里所有 summary 或 description 含'压测'两个字的 issue",
+      "expected_output": "Should use atl-search.py jql (Chinese-safe) NOT atl-jira.py search piped through PowerShell. The Chinese keyword should be passed correctly.",
+      "files": [],
+      "assertions": [
+        {"text": "Used atl-search.py jql command (Chinese-safe path)", "type": "process"},
+        {"text": "JQL passed contains '压测' literal", "type": "command_contains"},
+        {"text": "Returned issue list (or 'no results' if none)", "type": "output_contains"}
+      ]
+    },
+    {
+      "id": 6,
+      "name": "jira-transition-flow",
+      "prompt": "把 PLACEHOLDER_ISSUE_KEY 流转到 In Progress 状态，加一条评论说'开始调查'",
+      "expected_output": "Should: (1) call transitions to find ID for In Progress, (2) call transition --id <N> with comment. Two-step flow because transition IDs vary by workflow.",
+      "files": [],
+      "assertions": [
+        {"text": "Called atl-jira.py transitions first to discover ID", "type": "process"},
+        {"text": "Called atl-jira.py transition with --id and --comment", "type": "process"},
+        {"text": "Comment includes Chinese text '开始调查'", "type": "command_contains"},
+        {"text": "Reported success", "type": "output_contains"}
+      ]
+    },
+    {
+      "id": 7,
+      "name": "bitbucket-via-jira-dev-info",
+      "prompt": "PLACEHOLDER_ISSUE_KEY 这个 issue 关联了哪些 PR？分别是什么状态？",
+      "expected_output": "Should call atl-jira.py get-dev-info <key>. If no linked PRs, should report so cleanly. Should NOT try to call Bitbucket API directly (skill doesn't have that).",
+      "files": [],
+      "assertions": [
+        {"text": "Called atl-jira.py get-dev-info command", "type": "process"},
+        {"text": "Did NOT attempt to call Bitbucket directly", "type": "no_command", "command": "atl-bitbucket"},
+        {"text": "Either listed PRs with status, or reported 'no development info'", "type": "output_contains"}
+      ]
+    },
+    {
+      "id": 8,
+      "name": "confluence-cql-with-chinese",
+      "prompt": "在 Confluence 空间 PLACEHOLDER_SPACE_KEY 里找最近一周更新过、标题含'报告'的所有页面",
+      "expected_output": "Should use atl-search.py cql (Chinese-safe). CQL should include space + lastModified > now('-7d') + title ~ '报告'.",
+      "files": [],
+      "assertions": [
+        {"text": "Used atl-search.py cql command", "type": "process"},
+        {"text": "CQL includes space, lastModified time filter, and title contains '报告'", "type": "command_contains_all"},
+        {"text": "Returned page list with title + space + version", "type": "output_contains"}
+      ]
+    }
+  ]
+}
