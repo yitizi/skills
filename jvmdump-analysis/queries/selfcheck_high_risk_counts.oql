@@ -1,0 +1,36 @@
+// 高风险类计数 self-check（轻量，秒级）
+// 用途：与 MAT histogram 数字对账，差值 > 10% 提示 garbage 累积
+// 涵盖类（按 SKILL.md 高风险列表）：
+//   - OkHttp RealWebSocket / OkHttpClient（含 Flink shaded 包）
+//   - fabric8 WatchConnectionManager
+//   - java.lang.ref.Finalizer
+//   - java.net.SocksSocketImpl
+//   - java.nio.DirectByteBuffer
+
+var classes = [
+    // OkHttp（原版 + Flink shaded）
+    "okhttp3.internal.ws.RealWebSocket",
+    "okhttp3.OkHttpClient",
+    "org.apache.flink.kubernetes.shaded.okhttp3.internal.ws.RealWebSocket",
+    "org.apache.flink.kubernetes.shaded.okhttp3.OkHttpClient",
+    // fabric8
+    "io.fabric8.kubernetes.client.dsl.internal.WatchConnectionManager",
+    // 系统类
+    "java.lang.ref.Finalizer",
+    "java.net.SocksSocketImpl",
+    "java.nio.DirectByteBuffer"
+];
+
+var out = [];
+for (var i = 0; i < classes.length; i++) {
+    var fqn = classes[i];
+    var cnt = 0;
+    try {
+        var objs = heap.objects(fqn);
+        while (objs.hasMoreElements()) { cnt++; objs.nextElement(); }
+        out.push(fqn + " = " + cnt);
+    } catch(e) {
+        out.push(fqn + " = N/A (" + e + ")");
+    }
+}
+out;

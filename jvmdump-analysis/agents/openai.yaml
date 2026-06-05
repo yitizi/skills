@@ -1,0 +1,4 @@
+interface:
+  display_name: "JVM Dump Analysis"
+  short_description: "Analyze JVM heap dumps with Eclipse MAT + jhat dual-tool cross-validation"
+  default_prompt: "Use $jvmdump-analysis to analyze a JVM heap dump with MAT and jhat dual-tool cross-validation, and produce an evidence-ranked report."

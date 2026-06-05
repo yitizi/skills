@@ -1,0 +1,29 @@
+// Finalizer 队列 + Socket 类计数（轻量）
+// 用途：判断 Finalizer 队列是否堆积（finalize 慢导致对象长期占内存）
+// MAT 默认看不到大部分 Finalizer-only reachable 对象，jhat 能看到全量
+
+var out = [];
+var classes = [
+    "java.lang.ref.Finalizer",
+    "java.net.SocksSocketImpl",
+    "java.net.PlainSocketImpl",
+    "java.net.AbstractPlainSocketImpl",
+    "sun.nio.ch.SocketChannelImpl",
+    "java.io.FileInputStream",
+    "java.io.FileOutputStream",
+    "java.util.zip.Inflater",
+    "java.util.zip.Deflater"
+];
+
+for (var i = 0; i < classes.length; i++) {
+    var fqn = classes[i];
+    var cnt = 0;
+    try {
+        var objs = heap.objects(fqn);
+        while (objs.hasMoreElements()) { cnt++; objs.nextElement(); }
+        out.push(fqn + " = " + cnt);
+    } catch(e) {
+        out.push(fqn + " = N/A");
+    }
+}
+out;

@@ -1,0 +1,24 @@
+// DirectByteBuffer 容量统计（堆外内存）
+// 用途：判断堆外内存占用（DirectByteBuffer 的 capacity 字段是堆外内存大小）
+// 输出：实例数、总容量（字节）、cleaner 已清理数
+
+var dbbCnt = 0;
+var totalCap = 0;
+var cleanedCnt = 0;
+
+var dbbs = heap.objects("java.nio.DirectByteBuffer");
+while (dbbs.hasMoreElements()) {
+    var b = dbbs.nextElement();
+    dbbCnt++;
+    try {
+        totalCap += b.capacity;
+    } catch(e) {}
+    try {
+        // cleaner 为 null 表示已清理
+        if (!b.cleaner || b.cleaner == null) cleanedCnt++;
+    } catch(e) {}
+}
+
+"count=" + dbbCnt + " total_capacity_bytes=" + totalCap +
+" total_capacity_mb=" + (totalCap / 1024 / 1024).toFixed(2) +
+" cleaned=" + cleanedCnt;
