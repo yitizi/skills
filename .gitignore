@@ -1,0 +1,13 @@
+# This outer directory is a LOCAL workspace repository.
+#
+# `gstack/` is a SEPARATE third-party git repository
+# (https://github.com/garrytan/gstack.git) with its own history. Keep it out of
+# this repo so it is never staged or committed here, and so `git add` at the root
+# can never turn it into a broken embedded-repo gitlink. Manage gstack from inside
+# `gstack/` with its own git.
+gstack/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
