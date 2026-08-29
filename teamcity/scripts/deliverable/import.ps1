@@ -1,12 +1,11 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)]
     [string]$TcUrl,
 
     [Parameter(Mandatory=$true)]
     [string]$Username,
 
-    [Parameter(Mandatory=$true)]
-    [string]$Password,
+    [string]$Password = "",
 
     [Parameter(Mandatory=$true)]
     [string]$TargetId,
@@ -27,13 +26,14 @@ param(
     依赖：curl.exe, python
 
 .EXAMPLE
-    .\import.ps1 -TcUrl http://tc.example.com:8111 -Username admin -Password pass -TargetId MyTemplate
-    .\import.ps1 -TcUrl http://tc.example.com:8111 -Username admin -Password pass -TargetId MyTemplate -DryRun
-    .\import.ps1 -TcUrl http://tc.example.com:8111 -Username admin -Password pass -TargetId MyTemplate -Only "parameters,steps"
+    .\import.ps1 -TcUrl http://tc.example.com:8111 -Username admin -TargetId MyTemplate
+    .\import.ps1 -TcUrl http://tc.example.com:8111 -Username admin -TargetId MyTemplate -DryRun
+    .\import.ps1 -TcUrl http://tc.example.com:8111 -Username admin -TargetId MyTemplate -Only "parameters,steps"
 #>
 
 # UTF-8 设置
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $Utf8NoBom
 [Console]::OutputEncoding = $Utf8NoBom
 $OutputEncoding = $Utf8NoBom
 
@@ -45,7 +45,7 @@ if (-not (Test-Path $JsonFile)) {
 
 $TcUrl = $TcUrl.TrimEnd("/")
 $ApiBase = "$TcUrl/httpAuth/app/rest"
-$AuthHeader = "Basic " + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${Username}:${Password}"))
+$AuthHeader = ""
 
 # ── 工具函数 ─────────────────────────────────────────────
 
@@ -53,24 +53,32 @@ function Invoke-TcPut {
     param([string]$Path, [string]$BodyFile)
 
     $fullUrl = "$ApiBase/$Path"
-    $response = & curl.exe -s -w "`n%{http_code}" -X PUT `
-        -H "Authorization: $AuthHeader" `
-        -H "Content-Type: application/json; charset=utf-8" `
-        -H "Accept: application/json" `
-        --data-binary "@$BodyFile" `
-        "$fullUrl" 2>&1
+    $responseFile = [IO.Path]::GetTempFileName()
+    try {
+        $httpCode = & curl.exe -sS -w "%{http_code}" -X PUT `
+            -H "Authorization: $AuthHeader" `
+            -H "Content-Type: application/json; charset=utf-8" `
+            -H "Accept: application/json" `
+            --data-binary "@$BodyFile" `
+            -o $responseFile `
+            "$fullUrl"
 
-    $lines = $response -split "`n"
-    $httpCode = $lines[-1]
-    $body = ($lines[0..($lines.Length - 2)]) -join "`n"
-
-    if ([int]$httpCode -ge 400) {
-        Write-Host "FAILED (HTTP $httpCode)"
-        Write-Host "  $($body.Substring(0, [Math]::Min(200, $body.Length)))"
-        return $false
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "FAILED (curl exit $LASTEXITCODE)"
+            return $false
+        }
+        $httpCode = ("$httpCode").Trim()
+        if ($httpCode -notmatch '^\d{3}$' -or [int]$httpCode -ge 400) {
+            $body = [IO.File]::ReadAllText($responseFile, $Utf8NoBom)
+            Write-Host "FAILED (HTTP $httpCode)"
+            Write-Host "  $($body.Substring(0, [Math]::Min(200, $body.Length)))"
+            return $false
+        }
+        Write-Host "OK"
+        return $true
+    } finally {
+        Remove-Item -LiteralPath $responseFile -ErrorAction SilentlyContinue
     }
-    Write-Host "OK"
-    return $true
 }
 
 # ── 主逻辑 ───────────────────────────────────────────────
@@ -82,13 +90,14 @@ if ($Only -ne "") {
 } else {
     $comps = $allComps
 }
+$invalidComps = @($comps | Where-Object { $_ -notin $allComps })
+if ($invalidComps.Count -gt 0) {
+    Write-Error "Unknown component(s): $($invalidComps -join ', ')"
+    exit 1
+}
 
 # 创建临时目录
-$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$tmpDir = Join-Path $env:TEMP "tc-import-$timestamp"
-if (-not $tmpDir) {
-    $tmpDir = Join-Path $PSScriptRoot "tc-import-tmp-$timestamp"
-}
+$tmpDir = Join-Path ([IO.Path]::GetTempPath()) ("tc-import-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
 
 $jsonFileAbs = (Resolve-Path $JsonFile).Path
@@ -147,7 +156,7 @@ for comp in comps:
 [System.IO.File]::WriteAllText($pyFile, $pyCode, $Utf8NoBom)
 
 # 执行 Python 提取和预览
-python $pyFile $jsonFileAbs $compsStr $tmpDir
+python -X utf8 $pyFile $jsonFileAbs $compsStr $tmpDir
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Python extraction failed"
@@ -162,7 +171,7 @@ Write-Host "Target: $TargetId @ $TcUrl"
 $vcsFile = Join-Path $tmpDir "vcs-check.json"
 if (-not (Test-Path $vcsFile)) {
     # 快速检查 JSON 中是否有 vcs-root-entries
-    $hasVcs = python -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); v=d.get('vcs-root-entries',{}).get('vcs-root-entry',[]); print(len(v))" $jsonFileAbs 2>$null
+    $hasVcs = python -X utf8 -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); v=d.get('vcs-root-entries',{}).get('vcs-root-entry',[]); print(len(v))" $jsonFileAbs 2>$null
     if ($hasVcs -and [int]$hasVcs -gt 0) {
         Write-Host ""
         Write-Host "NOTE: VCS root entries ($hasVcs) not imported (IDs may differ across environments)."
@@ -185,6 +194,17 @@ if ($answer -ne "y" -and $answer -ne "Y") {
     exit 0
 }
 
+if (-not $Password) {
+    $securePassword = Read-Host "TeamCity password" -AsSecureString
+    $passwordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
+    try {
+        $Password = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPtr)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPtr)
+    }
+}
+$AuthHeader = "Basic " + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${Username}:${Password}"))
+
 Write-Host ""
 $errors = 0
 foreach ($comp in $comps) {
@@ -193,7 +213,7 @@ foreach ($comp in $comps) {
         Write-Host "  ${comp}: skipped (no file)"
         continue
     }
-    $content = Get-Content $compFile -Raw -Encoding UTF8
+    $content = [IO.File]::ReadAllText($compFile, $Utf8NoBom)
     if ([string]::IsNullOrWhiteSpace($content) -or $content.Trim() -eq "{}") {
         Write-Host "  ${comp}: skipped (empty)"
         continue

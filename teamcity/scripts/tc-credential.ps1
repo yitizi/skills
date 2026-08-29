@@ -1,18 +1,28 @@
-param(
+﻿param(
+    [ValidateSet("check", "setup", "update", "delete")]
     [string]$Action = "setup"
 )
 
 $ConfigDir = "$env:USERPROFILE\.claude\skill-config\teamcity"
 $EnvPath = Join-Path $ConfigDir "config.env"
 $NetrcPath = Join-Path $env:USERPROFILE ".netrc"
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $Utf8NoBom
+[Console]::OutputEncoding = $Utf8NoBom
+$OutputEncoding = $Utf8NoBom
 
 function Get-ExistingConfig {
-    $config = @{ Url = ""; User = ""; Machine = "" }
+    $config = @{
+        Url = ""; User = ""; Machine = ""; ApiRoot = ""; Proxy = ""; NoProxy = ""
+    }
     if (Test-Path $EnvPath) {
-        $lines = Get-Content $EnvPath -ErrorAction SilentlyContinue
+        $lines = Get-Content -LiteralPath $EnvPath -Encoding UTF8 -ErrorAction SilentlyContinue
         foreach ($line in $lines) {
             if ($line -match "^TC_URL=(.+)$") { $config.Url = $Matches[1].Trim() }
             if ($line -match "^TC_USER=(.+)$") { $config.User = $Matches[1].Trim() }
+            if ($line -match "^TC_API_ROOT=(.+)$") { $config.ApiRoot = $Matches[1].Trim() }
+            if ($line -match "^TC_PROXY=(.+)$") { $config.Proxy = $Matches[1].Trim() }
+            if ($line -match "^TC_NO_PROXY=(.+)$") { $config.NoProxy = $Matches[1].Trim() }
         }
     }
     if ($config.Url) {
@@ -25,9 +35,15 @@ function Test-FullyConfigured {
     $config = Get-ExistingConfig
     if (-not $config.Url -or -not $config.Machine) { return $false }
     if (-not (Test-Path $NetrcPath)) { return $false }
-    $content = Get-Content $NetrcPath -Raw -ErrorAction SilentlyContinue
+    $content = Get-Content -LiteralPath $NetrcPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
     if (-not $content) { return $false }
     return ($content -match "machine\s+$([regex]::Escape($config.Machine))")
+}
+
+function ConvertTo-NetrcToken([string]$Value) {
+    if ($Value -notmatch '[\s"\\]') { return $Value }
+    $escaped = $Value.Replace('\', '\\').Replace('"', '\"')
+    return '"' + $escaped + '"'
 }
 
 function Show-SetupDialog {
@@ -138,8 +154,12 @@ function Save-Config($input_data) {
     if (-not (Test-Path $ConfigDir)) {
         New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
     }
-    $envContent = "TC_URL=$url`r`nTC_USER=$username"
-    [System.IO.File]::WriteAllText($EnvPath, $envContent, [System.Text.Encoding]::ASCII)
+    $envLines = @("TC_URL=$url", "TC_USER=$username")
+    if ($existing.ApiRoot) { $envLines += "TC_API_ROOT=$($existing.ApiRoot)" }
+    if ($existing.Proxy) { $envLines += "TC_PROXY=$($existing.Proxy)" }
+    if ($existing.NoProxy) { $envLines += "TC_NO_PROXY=$($existing.NoProxy)" }
+    $envContent = $envLines -join "`r`n"
+    [System.IO.File]::WriteAllText($EnvPath, $envContent, $Utf8NoBom)
 
     # Write .netrc（按 block 解析，兼容多行格式）
     # 标准 .netrc 支持单行（machine X login Y password Z）和多行格式
@@ -150,7 +170,7 @@ function Save-Config($input_data) {
 
     $remainingBlocks = @()
     if (Test-Path $NetrcPath) {
-        $raw = Get-Content $NetrcPath -ErrorAction SilentlyContinue
+        $raw = Get-Content -LiteralPath $NetrcPath -Encoding UTF8 -ErrorAction SilentlyContinue
         if ($raw) {
             # 按 machine 关键词分 block
             $currentBlock = @()
@@ -180,14 +200,19 @@ function Save-Config($input_data) {
     }
 
     # 新条目始终写单行格式
-    $newEntry = "machine $machine login $username password $password"
+    # curl 7.84+ accepts quoted .netrc tokens. Keep the legacy plain-token form
+    # when possible, and quote only credentials that contain whitespace, quotes,
+    # or backslashes.
+    $netrcUser = ConvertTo-NetrcToken $username
+    $netrcPassword = ConvertTo-NetrcToken $password
+    $newEntry = "machine $machine login $netrcUser password $netrcPassword"
     $outputLines = @()
     foreach ($block in $remainingBlocks) {
         $outputLines += ($block -join "`r`n")
     }
     $outputLines += $newEntry
     $content = ($outputLines | Where-Object { $_ -ne $null -and $_ -ne "" }) -join "`r`n"
-    [System.IO.File]::WriteAllText($NetrcPath, $content, [System.Text.Encoding]::ASCII)
+    [System.IO.File]::WriteAllText($NetrcPath, $content, $Utf8NoBom)
 
     Write-Output "OK|$url"
 }
@@ -218,7 +243,7 @@ elseif ($Action -eq "delete") {
     }
 
     if ($config.Machine -and (Test-Path $NetrcPath)) {
-        $raw = Get-Content $NetrcPath -ErrorAction SilentlyContinue
+        $raw = Get-Content -LiteralPath $NetrcPath -Encoding UTF8 -ErrorAction SilentlyContinue
         if ($raw) {
             # 按 block 解析，删除目标 machine 的整个 block
             $blocks = @()
@@ -239,7 +264,7 @@ elseif ($Action -eq "delete") {
                 $outputLines = @()
                 foreach ($b in $kept) { $outputLines += ($b -join "`r`n") }
                 $remaining = ($outputLines | Where-Object { $_ -ne $null -and $_ -ne "" }) -join "`r`n"
-                [System.IO.File]::WriteAllText($NetrcPath, $remaining, [System.Text.Encoding]::ASCII)
+                [System.IO.File]::WriteAllText($NetrcPath, $remaining, $Utf8NoBom)
             } else {
                 Remove-Item $NetrcPath
             }

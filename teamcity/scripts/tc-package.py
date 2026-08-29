@@ -23,6 +23,10 @@ import shutil
 import argparse
 from datetime import datetime
 
+from tc_common import configure_utf8_stdio
+
+
+configure_utf8_stdio()
 
 def sanitize_name(name):
     """清理文件名中的特殊字符"""
@@ -81,17 +85,19 @@ chmod +x import.sh
 ### Windows (PowerShell)
 
 ```powershell
-.\\import.ps1 -TcUrl <TC_URL> -Username <用户名> -Password <密码> -TargetId <目标模板ID>
+.\\import.ps1 -TcUrl <TC_URL> -Username <用户名> -TargetId <目标模板ID>
 
 # 示例
-.\\import.ps1 -TcUrl https://teamcity.example.com -Username your_user -Password your_password -TargetId {mid}
+.\\import.ps1 -TcUrl https://teamcity.example.com -Username your_user -TargetId {mid}
 
 # 预览（不执行）
-.\\import.ps1 -TcUrl https://teamcity.example.com -Username your_user -Password your_password -TargetId {mid} -DryRun
+.\\import.ps1 -TcUrl https://teamcity.example.com -Username your_user -TargetId {mid} -DryRun
 
 # 只导入参数和步骤
-.\\import.ps1 -TcUrl https://teamcity.example.com -Username your_user -Password your_password -TargetId {mid} -Only "parameters,steps"
+.\\import.ps1 -TcUrl https://teamcity.example.com -Username your_user -TargetId {mid} -Only "parameters,steps"
 ```
+
+PowerShell 会在真正执行写操作前安全提示输入密码；`-DryRun` 不需要密码。
 
 ## 注意事项
 
@@ -110,7 +116,7 @@ def main():
                         help="交付物输出根目录（默认 artifact/）")
     args = parser.parse_args()
 
-    with open(args.input_file, "r", encoding="utf-8") as f:
+    with open(args.input_file, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
 
     meta = data.get("meta", {})
@@ -136,10 +142,12 @@ def main():
         if os.path.isfile(src):
             if script.endswith(".ps1"):
                 # PowerShell 5.1 的 here-string (@'...'@) 要求 CRLF 行尾才能正确识别终止符
-                with open(src, "r", encoding="utf-8") as f:
+                with open(src, "r", encoding="utf-8-sig") as f:
                     content = f.read()
                 content = content.replace("\r\n", "\n").replace("\n", "\r\n")
-                with open(dst, "w", encoding="utf-8", newline="") as f:
+                # Windows PowerShell 5.1 treats BOM-less script files as the
+                # active ANSI code page. Emit UTF-8 with BOM for .ps1 only.
+                with open(dst, "w", encoding="utf-8-sig", newline="") as f:
                     f.write(content)
             else:
                 shutil.copy2(src, dst)

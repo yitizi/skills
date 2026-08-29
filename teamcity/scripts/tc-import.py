@@ -38,22 +38,9 @@ import json
 import argparse
 import subprocess
 
+from tc_common import configure_utf8_stdio, find_tc_query, run_tc_query_to_file
 
-def find_tc_query():
-    candidates = [
-        os.path.join(os.path.dirname(__file__), "tc-query.ps1"),
-        ".claude/skills/teamcity/scripts/tc-query.ps1",
-        "skills/teamcity/scripts/tc-query.ps1",
-    ]
-    for p in candidates:
-        if os.path.isfile(p):
-            return p
-    return None
-
-
-def _ps_escape(s):
-    """转义 PowerShell 单引号字符串中的单引号（' → ''）"""
-    return s.replace("'", "''")
+configure_utf8_stdio()
 
 
 # 敏感参数名关键词，预览时掩码值
@@ -95,9 +82,11 @@ def tc_put(tc_query, path, body_json, *, auth=None):
                 "-w", "%{http_code}",
                 url,
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+            )
             http_code = result.stdout.strip()
-            with open(resp_file.name, "r", encoding="utf-8") as f:
+            with open(resp_file.name, "r", encoding="utf-8-sig") as f:
                 out = f.read()
             os.unlink(resp_file.name)
             if result.returncode != 0:
@@ -105,16 +94,24 @@ def tc_put(tc_query, path, body_json, *, auth=None):
             if http_code and http_code[0] in ("4", "5"):
                 return False, f"HTTP {http_code}: {out[:300]}"
         else:
-            # Skill 模式：通过 tc-query.ps1（已内置 HTTP 状态检查）
-            cmd = [
-                "powershell", "-ExecutionPolicy", "Bypass", "-Command",
-                f"$b = Get-Content '{_ps_escape(tmp_path)}' -Raw -Encoding UTF8; "
-                f"& '{_ps_escape(tc_query)}' -Path '{_ps_escape(path)}' -Method PUT -Body $b"
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
-            if result.returncode != 0:
-                return False, result.stderr or result.stdout
-            out = result.stdout
+            # Skill mode: pass file paths as argv, never JSON through a command
+            # string or PowerShell's native-process text pipeline.
+            resp_file = tempfile.NamedTemporaryFile(suffix=".resp", delete=False)
+            resp_file.close()
+            try:
+                run_tc_query_to_file(
+                    tc_query,
+                    path,
+                    resp_file.name,
+                    method="PUT",
+                    body_file=tmp_path,
+                )
+                with open(resp_file.name, "r", encoding="utf-8-sig") as f:
+                    out = f.read()
+            except RuntimeError as exc:
+                return False, str(exc)
+            finally:
+                os.unlink(resp_file.name)
         # TC REST API 错误以固定前缀开头，不能用 "error" 子串判断（响应内容可能含脚本文本）
         stripped = out.lstrip()
         if (stripped.startswith("Error has occurred during request processing") or
@@ -196,7 +193,7 @@ def main():
                   "Use --tc-url/--username/--password for standalone mode.", file=sys.stderr)
             sys.exit(1)
 
-    with open(args.input_file, "r", encoding="utf-8") as f:
+    with open(args.input_file, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
 
     meta = data.get("meta", {})

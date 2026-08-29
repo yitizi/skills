@@ -22,21 +22,9 @@ import argparse
 import subprocess
 import tempfile
 
+from tc_common import configure_utf8_stdio, find_tc_query, run_tc_query_to_file
 
-def find_tc_query():
-    candidates = [
-        os.path.join(os.path.dirname(__file__), "tc-query.ps1"),
-        ".claude/skills/teamcity/scripts/tc-query.ps1",
-        "skills/teamcity/scripts/tc-query.ps1",
-    ]
-    for p in candidates:
-        if os.path.isfile(p):
-            return p
-    return None
-
-
-def _ps_escape(s):
-    return s.replace("'", "''")
+configure_utf8_stdio()
 
 
 def _find_curl():
@@ -66,7 +54,9 @@ def tc_get(tc_query, path, *, auth=None):
             cmd = [curl, "-s", "-H", f"Authorization: {header}",
                    "-H", "Accept: application/json", "-o", tmp.name,
                    "-w", "%{http_code}", url]
-            result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+            )
             http_code = result.stdout.strip()
             if result.returncode != 0:
                 print(f"ERROR: curl failed (exit {result.returncode})", file=sys.stderr)
@@ -76,25 +66,14 @@ def tc_get(tc_query, path, *, auth=None):
                     print(f"ERROR: HTTP {http_code}: {f.read()[:300]}", file=sys.stderr)
                 sys.exit(1)
         else:
-            cmd = [
-                "powershell", "-ExecutionPolicy", "Bypass", "-Command",
-                f"& '{_ps_escape(tc_query)}' -Path '{_ps_escape(path)}'"
-            ]
-            result = subprocess.run(cmd, capture_output=True, encoding="utf-8")
-            # tc-query.ps1 输出通过 cmd /c type 直接写 stdout（原始 UTF-8 字节）
-            # 但 subprocess capture 可能经过 Python 编码层，所以改为让 tc-query 写文件
-            # 退而求其次：直接把 capture 的 stdout 写到临时文件（已经是 UTF-8 字符串）
-            if result.returncode != 0:
-                print(f"ERROR: {result.stderr}", file=sys.stderr)
+            try:
+                run_tc_query_to_file(tc_query, path, tmp.name)
+            except RuntimeError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
                 sys.exit(1)
-            with open(tmp.name, "w", encoding="utf-8") as f:
-                f.write(result.stdout)
 
-        with open(tmp.name, "r", encoding="utf-8") as f:
+        with open(tmp.name, "r", encoding="utf-8-sig") as f:
             content = f.read().strip()
-        # 处理可能的 UTF-8 BOM
-        if content.startswith("\ufeff"):
-            content = content[1:]
         return json.loads(content)
     finally:
         os.unlink(tmp.name)

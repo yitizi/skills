@@ -42,23 +42,9 @@ import difflib
 import argparse
 import subprocess
 
+from tc_common import configure_utf8_stdio, find_tc_query, tc_query_text
 
-def find_tc_query():
-    """自动查找 tc-query.ps1"""
-    candidates = [
-        os.path.join(os.path.dirname(__file__), "tc-query.ps1"),
-        ".claude/skills/teamcity/scripts/tc-query.ps1",
-        "skills/teamcity/scripts/tc-query.ps1",
-    ]
-    for p in candidates:
-        if os.path.isfile(p):
-            return p
-    return None
-
-
-def _ps_escape(s):
-    """转义 PowerShell 单引号字符串中的单引号（' → ''）"""
-    return s.replace("'", "''")
+configure_utf8_stdio()
 
 
 def fetch_diff_html(tc_query, prefix, ext_id, ver_from, ver_to, *, auth=None):
@@ -73,21 +59,21 @@ def fetch_diff_html(tc_query, prefix, ext_id, ver_from, ver_to, *, auth=None):
         ).decode("ascii")
         curl = shutil.which("curl.exe") or shutil.which("curl") or "curl"
         cmd = [curl, "-s", "-H", f"Authorization: Basic {cred}", url]
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
         if result.returncode != 0:
             print(f"ERROR: curl failed: {result.stderr}", file=sys.stderr)
             sys.exit(1)
         return result.stdout
     else:
-        cmd = [
-            "powershell", "-ExecutionPolicy", "Bypass", "-Command",
-            f"& '{_ps_escape(tc_query)}' -Path '{_ps_escape(raw_path)}' -RawPath"
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
-        if result.returncode != 0:
-            print(f"ERROR: tc-query.ps1 failed: {result.stderr}", file=sys.stderr)
+        try:
+            return tc_query_text(
+                tc_query, raw_path, raw_path=True, accept="text/html,*/*;q=0.8"
+            )
+        except RuntimeError as exc:
+            print(f"ERROR: tc-query.ps1 failed: {exc}", file=sys.stderr)
             sys.exit(1)
-        return result.stdout
 
 
 def extract_textarea(html_content, textarea_id):

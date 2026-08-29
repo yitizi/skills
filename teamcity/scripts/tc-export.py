@@ -35,17 +35,9 @@ import subprocess
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
+from tc_common import configure_utf8_stdio, find_tc_query, tc_query_text
 
-def find_tc_query():
-    candidates = [
-        os.path.join(os.path.dirname(__file__), "tc-query.ps1"),
-        ".claude/skills/teamcity/scripts/tc-query.ps1",
-        "skills/teamcity/scripts/tc-query.ps1",
-    ]
-    for p in candidates:
-        if os.path.isfile(p):
-            return p
-    return None
+configure_utf8_stdio()
 
 
 def _build_auth_header(username, password):
@@ -66,11 +58,6 @@ def _find_curl():
     return shutil.which("curl") or "curl"
 
 
-def _ps_escape(s):
-    """转义 PowerShell 单引号字符串中的单引号（' → ''）"""
-    return s.replace("'", "''")
-
-
 def tc_get(tc_query, path, *, auth=None):
     """GET 请求，返回 JSON。auth 为 None 时走 tc-query.ps1，否则直接 curl"""
     if auth:
@@ -79,21 +66,19 @@ def tc_get(tc_query, path, *, auth=None):
         curl = _find_curl()
         cmd = [curl, "-s", "-H", f"Authorization: {header}",
                "-H", "Accept: application/json", url]
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
         if result.returncode != 0:
             print(f"ERROR: curl failed: {result.stderr}", file=sys.stderr)
             sys.exit(1)
         return json.loads(result.stdout)
     else:
-        cmd = [
-            "powershell", "-ExecutionPolicy", "Bypass", "-Command",
-            f"& '{_ps_escape(tc_query)}' -Path '{_ps_escape(path)}'"
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
-        if result.returncode != 0:
-            print(f"ERROR: {result.stderr}", file=sys.stderr)
+        try:
+            return json.loads(tc_query_text(tc_query, path))
+        except (RuntimeError, json.JSONDecodeError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
-        return json.loads(result.stdout)
 
 
 def tc_get_raw(tc_query, raw_path, *, auth=None):
@@ -103,21 +88,21 @@ def tc_get_raw(tc_query, raw_path, *, auth=None):
         header = _build_auth_header(auth["username"], auth["password"])
         curl = _find_curl()
         cmd = [curl, "-s", "-H", f"Authorization: {header}", url]
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
         if result.returncode != 0:
             print(f"ERROR: curl failed: {result.stderr}", file=sys.stderr)
             sys.exit(1)
         return result.stdout
     else:
-        cmd = [
-            "powershell", "-ExecutionPolicy", "Bypass", "-Command",
-            f"& '{_ps_escape(tc_query)}' -Path '{_ps_escape(raw_path)}' -RawPath"
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
-        if result.returncode != 0:
-            print(f"ERROR: {result.stderr}", file=sys.stderr)
+        try:
+            return tc_query_text(
+                tc_query, raw_path, raw_path=True, accept="text/html,*/*;q=0.8"
+            )
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
-        return result.stdout
 
 
 def export_current(tc_query, bt_id, *, auth=None):
